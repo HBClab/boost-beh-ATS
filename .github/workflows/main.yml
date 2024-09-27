@@ -134,18 +134,59 @@ jobs:
           echo "CSV file: $csv_file"
           echo "Log file: $log_file"
           if [ -f "$csv_file" ]; then
-            python ./code/AFqC.py -s "$csv_file" -o "./data/${sub}/${run_part}" -sub "$sub" | tee "$log_file"
+            python ./code/ATSqC.py -s "$csv_file" -o "./data/${sub}/${run_part}" -sub "$sub" | tee "$log_file"
             echo "QC for ${sub}_${task}_${vers} completed"
           else
             echo "CSV file $csv_file does not exist"
           fi
+
+      - name: Upload QC Results
+        uses: actions/upload-artifact@v3
+        with:
+          name: qc-results-${{ matrix.config.sub }}-${{ matrix.config.task }}-${{ matrix.config.version }}-${{ matrix.config.run_part }}
+          path: |
+            ./data/${{ matrix.config.sub }}/${{ matrix.config.run_part }}/*.png
+            ./data/${{ matrix.config.sub }}/${{ matrix.config.run_part }}/*.log
+
+
+  commit_results:
+    name: Commit and Push QC Results
+    runs-on: self-hosted
+    needs: run_qc
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: ./
+
+      - name: Move QC Results
+        run: |
+          echo "Moving QC results to data directory..."
+          for dir in qc-results-*; do
+            echo "Processing artifact directory: $dir"
+            # Extract sub, task, version, and run_part from the directory name
+            IFS='-' read -r _ _ sub task version run_part <<< "$dir"
+            echo "Subject: $sub, Task: $task, Version: $version, Run Part: $run_part"
+            # Define the target directories
+            run_part_dir="./data/${sub}/${run_part}"
+            # Create the target directories if they don't exist
+            mkdir -p "$run_part_dir"
+            # Move .png files to the processed directory
+            mv "$dir"/*.png "$run_part_dir/" 2>/dev/null || :
+            # Move .log files to the run_part directory
+            mv "$dir"/*.log "$run_part_dir/" 2>/dev/null || :
+          done
 
       - name: Commit and Push QC Results
         run: |
           git config --global user.name "miloswrath"
           git config --global user.email "miloswrath@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/$GITHUB_REPOSITORY
-          git add ./data/*/*/*.png
+          git add ./data/*/*/*.png ./data/*/*/*.log
           git commit -m "Add QC results for subjects $(date +%Y-%m-%d)"
           git push origin main  
 
@@ -158,7 +199,7 @@ jobs:
   add:
     name: Generate Jekyll Posts and Deploy
     runs-on: ubuntu-latest
-    needs: [process_raw, run_qc]
+    needs: [process_raw, run_qc, commit_results]
 
     steps:
       # 1. Checkout the Repository
